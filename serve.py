@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -241,6 +242,9 @@ async def analyze_image(
         if backend not in ["pipeline", "vlm-transformers"]:
             return {"success": False, "message": "Invalid backend", "backend": backend}
         
+        # Record start time
+        start_time = time.time()
+        
         # Generate UUID4
         task_id = str(uuid.uuid4())
         
@@ -314,6 +318,10 @@ async def analyze_image(
                     returned_files[file_key] = None
             
             response["files"] = returned_files
+        
+        # Calculate elapsed time
+        elapsed_time = time.time() - start_time
+        response["time_elapsed"] = round(elapsed_time, 3)  # Round to 3 decimal places (milliseconds precision)
         
         return response
 
