@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 import asyncio
+import requests
 from fastapi import FastAPI, File, UploadFile, Form
 from loguru import logger
 
@@ -24,6 +25,8 @@ from mineru.backend.vlm.vlm_middle_json_mkcontent import union_make as vlm_union
 from mineru.backend.hybrid.hybrid_analyze import doc_analyze as hybrid_doc_analyze
 from mineru.utils.guess_suffix_or_lang import guess_suffix_by_path
 
+SERVER_URL = "http://127.0.0.1:30000"
+DATA_DIR = "data"
 
 def do_parse(
     output_dir,  # Output directory for storing parsing results
@@ -260,12 +263,20 @@ def parse_doc(
 app = FastAPI()
 mineru_semaphore = asyncio.Semaphore(1)
 
+# Helper Functions
+def cleanup_if_file_exceeds_limit(dir_path: str, limit: int = 10):
+    if len(os.listdir(dir_path)) > limit:
+        shutil.rmtree(dir_path)
+        logger.info(f"Cleaned up {dir_path} because it exceeded the limit of {limit} files")
+        return True
+    return False
+
+# / Helper Functions
+
 
 @app.post("/analyze-image")
 async def analyze_image(
-    image: UploadFile = File(...),
-    backend: str = Form(...),
-    server_url: str = Form(None)
+    image: UploadFile = File(...)
 ):
     """
     Analyze an image using either pipeline or vlm-transformers backend.
@@ -278,24 +289,12 @@ async def analyze_image(
         dict: Success status, message, backend, and files on success, None on failure
     """
     try:
-        BACKEND_MAP = {
-            "vlm": "vlm-http-client",
-        }
 
-        if not server_url:
-            server_url = "http://127.0.0.1:30000"
+        # Cleanup if there are too many files in the data directory
+        if os.path.exists(DATA_DIR):
+            cleanup_if_file_exceeds_limit(DATA_DIR)
         
-        # Backword compatibility for vlm-transformers and vlm
-        if backend.startswith('vlm-'):
-            backend = BACKEND_MAP.get("vlm", backend)
-        
-        # elif backend.startswith("hybrid-") or backend.startswith("pipeline"):
-        #     backend = "pipeline"
-        
-        # Validate backend
-        # if backend not in ["pipeline", 'vlm']:
-        if backend not in BACKEND_MAP.values():
-            return {"success": False, "message": "Invalid backend", "backend": backend}
+        os.makedirs(DATA_DIR, exist_ok=True)
         
         # Record start time
         start_time = time.time()
@@ -304,7 +303,7 @@ async def analyze_image(
         task_id = str(uuid.uuid4())
         
         # Create data directory structure
-        task_dir = os.path.join("data", task_id)
+        task_dir = os.path.join(DATA_DIR, task_id)
         os.makedirs(task_dir, exist_ok=True)
         
         # Save the image as data/uuid4/image.png
@@ -323,59 +322,34 @@ async def analyze_image(
                 parse_doc,
                 doc_path_list,
                 output_dir,
-                backend=backend,
-                server_url=server_url
+                backend="vlm-http-client",
+                server_url=SERVER_URL
             )
         
-        response = {"success": True, "output_dir": output_dir, "backend": backend}
-        # If backend is pipeline, read and return the output files
-        if backend == "pipeline":
-            output_files_dir = os.path.join(task_dir, "image", "auto")
-            files_to_return = {
-                "markdown": "image.md",
-                "model_output": "image_model.json",
-                "content_list": "image_content_list.json",
-                "middle_output": "image_middle.json"
-            }
-            
-            returned_files = {}
-            for file_key, filename in files_to_return.items():
-                file_path = os.path.join(output_files_dir, filename)
-                if os.path.exists(file_path):
-                    if filename.endswith(".json"):
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            returned_files[file_key] = json.load(f)
-                    else:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            returned_files[file_key] = f.read()
-                else:
-                    returned_files[file_key] = None
-            
-            response["files"] = returned_files
+        response = {"success": True, "output_dir": output_dir}
         
-        elif backend == "vlm-http-client":
-            output_files_dir = os.path.join(task_dir, "image", "vlm")
-            files_to_return = {
-                "markdown": "image.md",
-                "model_output": "image_model.json",
-                "content_list": "image_content_list.json",
-                "middle_output": "image_middle.json"
-            }
-            
-            returned_files = {}
-            for file_key, filename in files_to_return.items():
-                file_path = os.path.join(output_files_dir, filename)
-                if os.path.exists(file_path):
-                    if filename.endswith(".json"):
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            returned_files[file_key] = json.load(f)
-                    else:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            returned_files[file_key] = f.read()
+        output_files_dir = os.path.join(task_dir, "image", "vlm")
+        files_to_return = {
+            "markdown": "image.md",
+            "model_output": "image_model.json",
+            "content_list": "image_content_list.json",
+            "middle_output": "image_middle.json"
+        }
+        
+        returned_files = {}
+        for file_key, filename in files_to_return.items():
+            file_path = os.path.join(output_files_dir, filename)
+            if os.path.exists(file_path):
+                if filename.endswith(".json"):
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        returned_files[file_key] = json.load(f)
                 else:
-                    returned_files[file_key] = None
-            
-            response["files"] = returned_files
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        returned_files[file_key] = f.read()
+            else:
+                returned_files[file_key] = None
+        
+        response["files"] = returned_files
         
         # Calculate elapsed time
         elapsed_time = time.time() - start_time
@@ -386,18 +360,42 @@ async def analyze_image(
 
     except Exception as e:
         logger.exception(e)
-        return {"success": False, "message": str(e), "backend": backend}
+        return {"success": False, "message": str(e)}
 
+
+# @app.get("/health")
+# async def health_check():
+#     """
+#     Health check endpoint to verify if the system is running.
+    
+#     Returns:
+#         dict: Status of the system
+#     """
+    
+#     return {"status": "running", "success": True}
 
 @app.get("/health")
-async def health_check():
-    """
-    Health check endpoint to verify if the system is running.
-    
-    Returns:
-        dict: Status of the system
-    """
-    return {"status": "running", "success": True}
+async def health():
+    try:
+        r = requests.get(
+            f"{SERVER_URL}/v1/models",
+            timeout=2
+        )
+        if r.status_code != 200:
+            raise RuntimeError("models endpoint unhealthy")
+
+        return {
+            "api_status": "ok",
+            "backend_status": "ok",
+            # "models": len(r.json().get("data", []))
+        }
+    except Exception as e:
+        return {
+            "api_status": "ok",
+            "backend_status": "down",
+            "error": str(e)
+        }
+
 
 
 @app.post("/cleanup")
@@ -409,11 +407,10 @@ async def cleanup_data():
         dict: Success status and message
     """
     try:
-        data_dir = "data"
-        if os.path.exists(data_dir):
+        if os.path.exists(DATA_DIR):
             # Remove all contents in the data directory
-            for item in os.listdir(data_dir):
-                item_path = os.path.join(data_dir, item)
+            for item in os.listdir(DATA_DIR):
+                item_path = os.path.join(DATA_DIR, item)
                 if os.path.isdir(item_path):
                     shutil.rmtree(item_path)
                 else:
