@@ -1,4 +1,3 @@
-# Copyright (c) Opendatalab. All rights reserved.
 import copy
 import json
 import os
@@ -32,6 +31,8 @@ from mineru.utils.guess_suffix_or_lang import guess_suffix_by_path
 
 SERVER_URL = "http://127.0.0.1:30000"
 DATA_DIR = "data"
+IMAGE_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+DOCUMENT_MIME_TYPES = ["application/pdf"]
 
 def do_parse(
     output_dir,  # Output directory for storing parsing results
@@ -289,7 +290,7 @@ def zip_directory(src_dir: str, zip_path: str):
 
 @app.post("/analyze-image")
 async def analyze_image(
-    image: UploadFile = File(...),
+    image: UploadFile = File(..., media_type="image/*"),
     download_dir: Annotated[bool, Form()] = False,
 ):
     """
@@ -297,13 +298,14 @@ async def analyze_image(
     
     Args:
         image: The image file to analyze
-        backend: Either "pipeline" or "vlm-transformers"
     
     Returns:
         dict: Success status, message, backend, and files on success, None on failure
     """
     try:
-
+        if image.content_type not in IMAGE_MIME_TYPES:
+            raise ValueError(f"Invalid image MIME type: {image.content_type}")
+        
         # Cleanup if there are too many files in the data directory
         if os.path.exists(DATA_DIR):
             cleanup_if_file_exceeds_limit(DATA_DIR)
@@ -388,6 +390,108 @@ async def analyze_image(
         return {"success": False, "message": str(e)}
 
 
+@app.post("/analyze-document")
+async def analyze_document(
+    document: UploadFile = File(..., media_type="application/pdf"),
+    download_dir: Annotated[bool, Form()] = False,
+):
+    """
+    Analyze a document using either pipeline or vlm-transformers backend.
+    
+    Args:
+        document: The document file to analyze
+    
+    Returns:
+        dict: Success status, message, backend, and files on success, None on failure
+    """
+    try:
+        if document.content_type not in DOCUMENT_MIME_TYPES:
+            raise ValueError(f"Invalid document MIME type: {document.content_type}")
+        
+        # Cleanup if there are too many files in the data directory
+        if os.path.exists(DATA_DIR):
+            cleanup_if_file_exceeds_limit(DATA_DIR)
+        
+        os.makedirs(DATA_DIR, exist_ok=True)
+        
+        # Record start time
+        start_time = time.time()
+        
+        # Generate UUID4
+        task_id = str(uuid.uuid4())
+        
+        # Create data directory structure
+        task_dir = os.path.join(DATA_DIR, task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        
+        # Save the document as data/uuid4/document.pdf
+        document_path = os.path.join(task_dir, "document.pdf")
+        with open(document_path, "wb") as f:
+            content = await document.read()
+            f.write(content)
+        
+        # Use the same folder as output_dir
+        output_dir = task_dir
+        
+        # Call parse_doc with the appropriate backend
+        doc_path_list = [Path(document_path)]
+        async with mineru_semaphore:
+            await asyncio.to_thread(
+                parse_doc,
+                doc_path_list,
+                output_dir,
+                backend="vlm-http-client",
+                server_url=SERVER_URL
+            )
+        
+        response = {"success": True, "output_dir": output_dir}
+        
+        output_files_dir = os.path.join(task_dir, "document", "vlm")
+        files_to_return = {
+            "markdown": "document.md",
+            "model_output": "document_model.json",
+            "content_list": "document_content_list.json",
+            "middle_output": "document_middle.json"
+        }
+        
+        returned_files = {}
+        for file_key, filename in files_to_return.items():
+            file_path = os.path.join(output_files_dir, filename)
+            if os.path.exists(file_path):
+                if filename.endswith(".json"):
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        returned_files[file_key] = json.load(f)
+                else:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        returned_files[file_key] = f.read()
+            else:
+                returned_files[file_key] = None
+        
+        response["files"] = returned_files
+        
+        # Calculate elapsed time
+        elapsed_time = time.time() - start_time
+        response["time_elapsed"] = round(elapsed_time, 3)  # Round to 3 decimal places (milliseconds precision)
+
+        if download_dir:
+            tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+            tmp_zip.close()
+
+            zip_directory(task_dir, tmp_zip.name)
+
+            return FileResponse(
+                path=tmp_zip.name,
+                media_type="application/zip",
+                filename=f"{task_id}.zip"
+            )
+        
+        return response
+
+    except Exception as e:
+        logger.exception(e)
+        return {"success": False, "message": str(e)}
+
+
 # @app.get("/health")
 # async def health_check():
 #     """
@@ -423,7 +527,7 @@ async def health():
 
 
 
-@app.post("/cleanup")
+@app.get("/cleanup")
 async def cleanup_data():
     """
     Cleanup the data directory by removing all subdirectories and files.
