@@ -12,6 +12,11 @@ import requests
 from fastapi import FastAPI, File, UploadFile, Form
 from loguru import logger
 
+import zipfile
+import tempfile
+from typing_extensions import Annotated
+from fastapi.responses import FileResponse
+
 from mineru.cli.common import convert_pdf_bytes_to_bytes_by_pypdfium2, prepare_env, read_fn
 from mineru.data.data_reader_writer import FileBasedDataWriter
 from mineru.utils.draw_bbox import draw_layout_bbox, draw_span_bbox
@@ -271,12 +276,21 @@ def cleanup_if_file_exceeds_limit(dir_path: str, limit: int = 10):
         return True
     return False
 
+def zip_directory(src_dir: str, zip_path: str):
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(src_dir):
+            for file in files:
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, src_dir)
+                zipf.write(full_path, rel_path)
+
 # / Helper Functions
 
 
 @app.post("/analyze-image")
 async def analyze_image(
-    image: UploadFile = File(...)
+    image: UploadFile = File(...),
+    download_dir: Annotated[bool, Form()] = False,
 ):
     """
     Analyze an image using either pipeline or vlm-transformers backend.
@@ -354,9 +368,20 @@ async def analyze_image(
         # Calculate elapsed time
         elapsed_time = time.time() - start_time
         response["time_elapsed"] = round(elapsed_time, 3)  # Round to 3 decimal places (milliseconds precision)
+
+        if download_dir:
+            tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+            tmp_zip.close()
+
+            zip_directory(task_dir, tmp_zip.name)
+
+            return FileResponse(
+                path=tmp_zip.name,
+                media_type="application/zip",
+                filename=f"{task_id}.zip"
+            )
         
         return response
-
 
     except Exception as e:
         logger.exception(e)
