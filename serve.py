@@ -297,7 +297,7 @@ def zip_directory(src_dir: str, zip_path: str) -> None:
 # / Helper Functions
 
 
-@app.post("/analyze-image")
+@app.post("/analyze-image", response_model=None)
 async def analyze_image(
     image: UploadFile = File(..., media_type="image/*"),
     download_dir: Annotated[bool, Form()] = False,
@@ -402,7 +402,7 @@ async def analyze_image(
         return {"success": False, "message": str(e)}
 
 
-@app.post("/analyze-document")
+@app.post("/analyze-document", response_model=None)
 async def analyze_document(
     document: UploadFile = File(..., media_type="application/pdf"),
     download_dir: Annotated[bool, Form()] = False,
