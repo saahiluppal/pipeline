@@ -13,6 +13,8 @@ from loguru import logger
 
 import zipfile
 import tempfile
+from typing import Any, Optional
+
 from typing_extensions import Annotated
 from fastapi.responses import FileResponse
 
@@ -270,14 +272,21 @@ app = FastAPI()
 mineru_semaphore = asyncio.Semaphore(1)
 
 # Helper Functions
-def cleanup_if_file_exceeds_limit(dir_path: str, limit: int = 10):
+def cleanup_if_file_exceeds_limit(dir_path: str, limit: int = 10) -> bool:
+    """
+    Remove the directory if it contains more than `limit` items.
+
+    Returns:
+        True if the directory was removed, False otherwise.
+    """
     if len(os.listdir(dir_path)) > limit:
         shutil.rmtree(dir_path)
         logger.info(f"Cleaned up {dir_path} because it exceeded the limit of {limit} files")
         return True
     return False
 
-def zip_directory(src_dir: str, zip_path: str):
+def zip_directory(src_dir: str, zip_path: str) -> None:
+    """Create a zip archive of the given directory at zip_path."""
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for root, _, files in os.walk(src_dir):
             for file in files:
@@ -292,15 +301,18 @@ def zip_directory(src_dir: str, zip_path: str):
 async def analyze_image(
     image: UploadFile = File(..., media_type="image/*"),
     download_dir: Annotated[bool, Form()] = False,
-):
+) -> dict[str, Any] | FileResponse:
     """
-    Analyze an image using either pipeline or vlm-transformers backend.
-    
+    Analyze an image using the VLM HTTP client backend.
+
     Args:
-        image: The image file to analyze
-    
+        image: The image file to analyze (JPEG, PNG, GIF, or WebP).
+        download_dir: If True, return a zip of the full output directory instead of JSON.
+
     Returns:
-        dict: Success status, message, backend, and files on success, None on failure
+        On success: dict with "success" True, "output_dir", "files" (markdown, model_output,
+            content_list, middle_output), and "time_elapsed". If download_dir is True,
+            returns a zip FileResponse. On failure: dict with "success" False and "message".
     """
     try:
         if image.content_type not in IMAGE_MIME_TYPES:
@@ -394,15 +406,18 @@ async def analyze_image(
 async def analyze_document(
     document: UploadFile = File(..., media_type="application/pdf"),
     download_dir: Annotated[bool, Form()] = False,
-):
+) -> dict[str, Any] | FileResponse:
     """
-    Analyze a document using either pipeline or vlm-transformers backend.
-    
+    Analyze a PDF document using the VLM HTTP client backend.
+
     Args:
-        document: The document file to analyze
-    
+        document: The PDF file to analyze.
+        download_dir: If True, return a zip of the full output directory instead of JSON.
+
     Returns:
-        dict: Success status, message, backend, and files on success, None on failure
+        On success: dict with "success" True, "output_dir", "files" (markdown, model_output,
+            content_list, middle_output), and "time_elapsed". If download_dir is True,
+            returns a zip FileResponse. On failure: dict with "success" False and "message".
     """
     try:
         if document.content_type not in DOCUMENT_MIME_TYPES:
@@ -504,7 +519,14 @@ async def analyze_document(
 #     return {"status": "running", "success": True}
 
 @app.get("/health")
-async def health():
+async def health() -> dict[str, Any]:
+    """
+    Health check: reports API status and whether the VLM backend is reachable.
+
+    Returns:
+        dict with "api_status" ("ok"), "backend_status" ("ok" or "down"),
+        and optionally "error" if the backend is down.
+    """
     try:
         r = requests.get(
             f"{SERVER_URL}/v1/models",
@@ -528,12 +550,12 @@ async def health():
 
 
 @app.get("/cleanup")
-async def cleanup_data():
+async def cleanup_data() -> dict[str, Any]:
     """
-    Cleanup the data directory by removing all subdirectories and files.
-    
+    Remove all task subdirectories and files under the data directory.
+
     Returns:
-        dict: Success status and message
+        dict with "success" (bool) and "message" (str).
     """
     try:
         if os.path.exists(DATA_DIR):
