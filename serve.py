@@ -404,10 +404,11 @@ async def analyze_image(
 
 @app.post("/analyze-document", response_model=None)
 async def analyze_document(
-    document: UploadFile = File(..., media_type="application/pdf"),
-    download_dir: Annotated[bool, Form()] = False,
-    start_page: Annotated[int, Form()] = 0,
-    end_page: Annotated[Optional[int], Form()] = None,
+    document: UploadFile = File(..., media_type="application/pdf", description="The PDF file to analyze."),
+    download_dir: Annotated[bool, Form(description="If true, return a zip of the full output directory instead of JSON.")] = False,
+    start_page: Annotated[int, Form(description="Start page index (0-based, inclusive). Defaults to 0.")] = 0,
+    end_page: Annotated[Optional[int], Form(description="End page index (0-based, inclusive). Defaults to None, which processes all pages to the end.")] = None,
+    page_index: Annotated[Optional[int], Form(description="Process only this single page (0-based). When provided, overrides start_page and end_page.")] = None,
 ) -> dict[str, Any] | FileResponse:
     """
     Analyze a PDF document using the VLM HTTP client backend.
@@ -417,6 +418,7 @@ async def analyze_document(
         download_dir: If True, return a zip of the full output directory instead of JSON.
         start_page: Start page index (0-based, inclusive). Defaults to 0.
         end_page: End page index (0-based, inclusive). Defaults to None (process all pages).
+        page_index: If provided, process only this single page (0-based). Overrides start_page and end_page.
 
     Returns:
         On success: dict with "success" True, "output_dir", "files" (markdown, model_output,
@@ -426,6 +428,11 @@ async def analyze_document(
     try:
         if document.content_type not in DOCUMENT_MIME_TYPES:
             raise ValueError(f"Invalid document MIME type: {document.content_type}")
+        
+        # If page_index is provided, override start_page and end_page to target a single page
+        if page_index is not None:
+            start_page = page_index
+            end_page = page_index
         
         # Cleanup if there are too many files in the data directory
         if os.path.exists(DATA_DIR):
