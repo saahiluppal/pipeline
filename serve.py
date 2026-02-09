@@ -406,6 +406,8 @@ async def analyze_image(
 async def analyze_document(
     document: UploadFile = File(..., media_type="application/pdf"),
     download_dir: Annotated[bool, Form()] = False,
+    start_page: Annotated[int, Form()] = 0,
+    end_page: Annotated[Optional[int], Form()] = None,
 ) -> dict[str, Any] | FileResponse:
     """
     Analyze a PDF document using the VLM HTTP client backend.
@@ -413,6 +415,8 @@ async def analyze_document(
     Args:
         document: The PDF file to analyze.
         download_dir: If True, return a zip of the full output directory instead of JSON.
+        start_page: Start page index (0-based, inclusive). Defaults to 0.
+        end_page: End page index (0-based, inclusive). Defaults to None (process all pages).
 
     Returns:
         On success: dict with "success" True, "output_dir", "files" (markdown, model_output,
@@ -456,7 +460,9 @@ async def analyze_document(
                 doc_path_list,
                 output_dir,
                 backend="vlm-http-client",
-                server_url=SERVER_URL
+                server_url=SERVER_URL,
+                start_page_id=start_page,
+                end_page_id=end_page,
             )
         
         response = {"success": True, "output_dir": output_dir}
