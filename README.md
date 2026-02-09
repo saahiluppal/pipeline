@@ -126,3 +126,11 @@ The container entrypoint (`start.sh`) launches:
 - Python 3.10+
 - MinerU `>=2.7.0` (with `core` extras)
 - FastAPI, Uvicorn, Loguru, python-multipart, boto3
+
+## Version History
+
+| Version | Commit | Highlights |
+|---------|--------|------------|
+| **v1** | [`4a04302`](https://github.com/saahiluppal/pipeline/tree/4a043025532a43d43d1aeb76b76cd65236358bf1) | Initial release — `POST /analyze-image` with selectable `pipeline` / `vlm-transformers` backends, basic `/health` and `/cleanup` endpoints. |
+| **v2** | [`5277479`](https://github.com/saahiluppal/pipeline/tree/52774795baa3d8ebf87e9e113591c183d33ed61a) | Added `start.sh` entrypoint with co-located MinerU OpenAI server; switched to `vlm-http-client` backend; added `POST /analyze-document` with page-range support (`start_page`, `end_page`, `page_index`); enhanced `/health` to probe VLM backend status; added `download_dir` zip-download option on both analyze endpoints; changed `/cleanup` from POST to GET. |
+| **v2.1** | [`16d1eaf`](https://github.com/saahiluppal/pipeline/tree/16d1eaf701dd2155ee8b3f267e5fcfbc6397a10d) | Updated README to reflect current API surface, backends, architecture, and Docker instructions. |
