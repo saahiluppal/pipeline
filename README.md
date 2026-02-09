@@ -1,30 +1,106 @@
 # Pipeline Service
 
-A FastAPI service for document and image analysis using the MinerU library.
+A FastAPI service for document and image analysis powered by the [MinerU](https://github.com/opendatalab/MinerU) library with a built-in vLLM backend.
 
 ## Overview
 
-This service provides document parsing capabilities with support for multiple backends:
-- **pipeline**: General-purpose parsing backend
-- **vlm-transformers**: Vision Language Model backend using transformers
+The container runs two processes:
+
+| Process | Port | Description |
+|---------|------|-------------|
+| **MinerU OpenAI Server** | 30000 | vLLM-based VLM inference server (started automatically) |
+| **FastAPI App** | 8080 | Public-facing API that orchestrates parsing via MinerU |
+
+Supported parsing backends (used internally by `parse_doc`):
+
+- **pipeline** — General-purpose OCR/layout pipeline.
+- **vlm-auto-engine** — VLM via local compute (auto-detected engine).
+- **vlm-http-client** — VLM via a remote OpenAI-compatible server.
+- **hybrid-auto-engine** — Next-gen hybrid (pipeline + VLM) via local compute (default).
+- **hybrid-http-client** — Hybrid via a remote server with minimal local compute.
+
+The API endpoints use the `vlm-http-client` backend by default, routing requests to the co-located MinerU OpenAI server on port 30000.
 
 ## API Endpoints
 
-### POST `/analyze-image`
-Analyzes an image file and returns structured output (markdown, JSON).
+### `POST /analyze-image`
 
-**Parameters:**
-- `image`: Image file to analyze (multipart/form-data)
-- `backend`: Either `"pipeline"` or `"vlm-transformers"`
+Analyze an image file (JPEG, PNG, GIF, or WebP) and return structured output.
+
+**Parameters (multipart/form-data):**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `image` | file | *(required)* | The image file to analyze |
+| `download_dir` | bool | `false` | If `true`, return a zip archive of the full output directory instead of JSON |
+
+**Response (JSON):**
+
+```json
+{
+  "success": true,
+  "output_dir": "data/<task-id>",
+  "files": {
+    "markdown": "...",
+    "model_output": { ... },
+    "content_list": { ... },
+    "middle_output": { ... }
+  },
+  "time_elapsed": 12.345
+}
+```
+
+When `download_dir=true`, the response is a zip file download instead.
+
+---
+
+### `POST /analyze-document`
+
+Analyze a PDF document and return structured output.
+
+**Parameters (multipart/form-data):**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `document` | file | *(required)* | The PDF file to analyze |
+| `download_dir` | bool | `false` | If `true`, return a zip archive of the full output directory instead of JSON |
+| `start_page` | int | `0` | Start page index (0-based, inclusive) |
+| `end_page` | int | `null` | End page index (0-based, inclusive). `null` processes all pages to the end |
+| `page_index` | int | `null` | Process only this single page (0-based). Overrides `start_page`/`end_page` when provided |
+
+**Response:** Same structure as `/analyze-image` (with `document.*` filenames).
+
+---
+
+### `GET /health`
+
+Health check that reports both API and VLM backend status.
 
 **Response:**
-- Returns markdown, model output, content list, and middle JSON files
 
-### GET `/health`
-Health check endpoint.
+```json
+{
+  "api_status": "ok",
+  "backend_status": "ok"
+}
+```
 
-### POST `/cleanup`
-Cleans up the data directory.
+If the backend is unreachable, `backend_status` will be `"down"` and an `error` field is included.
+
+---
+
+### `GET /cleanup`
+
+Remove all task subdirectories and files under the `data/` directory.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Data directory cleaned successfully"
+}
+```
 
 ## Running the Service
 
@@ -32,13 +108,21 @@ Cleans up the data directory.
 
 ```bash
 docker build -t pipeline-service .
-docker run -p 8080:8080 pipeline-service
+docker run --gpus all -p 8080:8080 -p 30000:30000 pipeline-service
 ```
 
-The service will be available at `http://localhost:8080`.
+The FastAPI service will be available at `http://localhost:8080` and the internal VLM server at `http://localhost:30000`.
+
+### Startup
+
+The container entrypoint (`start.sh`) launches:
+
+1. `mineru-openai-server` on port 30000 (background)
+2. `uvicorn serve:app` on port 8080 (foreground)
 
 ## Requirements
 
-- CUDA 12.1.1
+- GPU with CUDA support (base image: `vllm/vllm-openai:v0.10.1.1`)
 - Python 3.10+
-- MinerU library
+- MinerU `>=2.7.0` (with `core` extras)
+- FastAPI, Uvicorn, Loguru, python-multipart, boto3
